@@ -120,9 +120,8 @@ export function TeacherPage() {
       <p className="muted">
         Upload a PDF with numbered questions (<code>1.</code> …) and options. <strong>Digital PDFs:</strong> options
         as <code>A)</code> lines or plain lines; correct answers from <strong>bold</strong> text.{' '}
-        <strong>Photo / scan PDFs:</strong> OpenCV + <strong>Tesseract OCR</strong> (install for Windows and add to
-        PATH); ticks in the left margin are detected with CV. Start the API with <code>npm run dev:api</code> or{' '}
-        <code>npm run dev:all</code>.
+        <strong>Scanned / image PDFs:</strong> <strong>Tesseract OCR</strong> is used as fallback (install for Windows
+        and add to PATH). Start the API with <code>npm run dev:api</code> or <code>npm run dev:all</code>.
       </p>
 
       <input

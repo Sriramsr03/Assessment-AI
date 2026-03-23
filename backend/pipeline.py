@@ -1,22 +1,18 @@
 """
-MCQ extraction: PyMuPDF, Tesseract OCR, OpenCV photo path, MiniLM structuring.
+MCQ extraction: PyMuPDF + optional Tesseract OCR fallback.
 """
 from __future__ import annotations
 
 import io
 import json
 import re
-import time
 from pathlib import Path
 from typing import Any, Callable
 
-import cv2
 import fitz  # pymupdf
-import numpy as np
 from PIL import Image
 
 ProgressFn = Callable[[int, str, str], None]
-_embedder = None
 
 
 def require_tesseract() -> None:
@@ -27,225 +23,16 @@ def require_tesseract() -> None:
     except Exception as e:
         raise RuntimeError(
             "Tesseract OCR is not installed or not on your PATH. "
-            "Written/photo PDFs need it. Windows: https://github.com/UB-Mannheim/tesseract/wiki "
+            "Scanned/image PDFs need it. Windows: https://github.com/UB-Mannheim/tesseract/wiki "
             "Add e.g. C:\\Program Files\\Tesseract-OCR to PATH, restart the terminal."
         ) from e
 
 
-def _get_embedder():
-    global _embedder
-    if _embedder is None:
-        from sentence_transformers import SentenceTransformer
-
-        _embedder = SentenceTransformer("all-MiniLM-L6-v2")
-    return _embedder
-
-
 def _notify(p: ProgressFn | None, lo: int, hi: int, phase_key: str, label: str, t: float = 0.02):
     if not p:
-        time.sleep(t)
         return
     for x in range(lo, hi + 1):
         p(x, phase_key, label)
-        time.sleep(t * 0.15)
-
-
-def pixmap_to_bgr(pix: fitz.Pixmap) -> np.ndarray:
-    samples = np.frombuffer(pix.samples, dtype=np.uint8)
-    h, w = pix.h, pix.w
-    if pix.n == 4:
-        arr = samples.reshape(h, w, 4)
-        return cv2.cvtColor(arr, cv2.COLOR_RGBA2BGR)
-    if pix.n == 3:
-        return samples.reshape(h, w, 3)
-    if pix.n == 1:
-        g = samples.reshape(h, w)
-        return cv2.cvtColor(g, cv2.COLOR_GRAY2BGR)
-    raise ValueError(f"Unsupported pixmap channels: {pix.n}")
-
-
-def preprocess_photo_page_cv(img_bgr: np.ndarray) -> np.ndarray:
-    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
-    gray = cv2.fastNlMeansDenoising(gray, None, 10, 7, 21)
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    return clahe.apply(gray)
-
-
-def left_margin_tick_score(gray: np.ndarray, y0: int, y1: int, page_w: int) -> float:
-    h, w = gray.shape[:2]
-    y0 = max(0, min(y0, h - 1))
-    y1 = max(y0 + 1, min(y1, h))
-    x1 = max(8, int(0.24 * page_w))
-    roi = gray[y0:y1, 0:x1]
-    if roi.size == 0:
-        return 0.0
-    _, binary = cv2.threshold(roi, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-    kernel = np.ones((2, 2), np.uint8)
-    binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
-    return float(np.mean(binary > 0))
-
-
-def group_tesseract_words_into_lines(data: dict) -> list[dict[str, Any]]:
-    n = len(data["text"])
-    groups: dict[tuple[int, int, int], list[tuple[int, int, int, int, str]]] = {}
-    for i in range(n):
-        conf = int(data["conf"][i])
-        if conf < 0:
-            continue
-        t = (data["text"][i] or "").strip()
-        if not t:
-            continue
-        key = (data["block_num"][i], data["par_num"][i], data["line_num"][i])
-        left = int(data["left"][i])
-        top = int(data["top"][i])
-        wi = int(data["width"][i])
-        hi = int(data["height"][i])
-        groups.setdefault(key, []).append((left, top, wi, hi, t))
-
-    lines_out: list[dict[str, Any]] = []
-    for key in sorted(groups.keys()):
-        parts = sorted(groups[key], key=lambda x: x[0])
-        left = min(p[0] for p in parts)
-        top = min(p[1] for p in parts)
-        right = max(p[0] + p[2] for p in parts)
-        bottom = max(p[1] + p[3] for p in parts)
-        text = " ".join(p[4] for p in parts)
-        lines_out.append(
-            {
-                "left": left,
-                "top": top,
-                "width": right - left,
-                "height": bottom - top,
-                "text": text,
-            }
-        )
-    return lines_out
-
-
-def parse_lines_photo_mcq_with_ticks(
-    lines: list[dict[str, Any]],
-    gray: np.ndarray,
-) -> list[dict[str, Any]]:
-    page_h, page_w = gray.shape[:2]
-    questions: list[dict[str, Any]] = []
-    i = 0
-    qid = 0
-    while i < len(lines):
-        raw = lines[i]["text"].strip()
-        raw = re.sub(r"^[\s|•]+", "", raw)
-        m = re.match(r"^(\d{1,2})\s*[\.)]\s*(.+)$", raw)
-        if not m:
-            i += 1
-            continue
-        stem = m.group(2).strip()
-        opts: list[str] = []
-        scores: list[float] = []
-        i += 1
-        while i < len(lines):
-            nxt = lines[i]["text"].strip()
-            nxt = re.sub(r"^[\s|•]+", "", nxt)
-            if re.match(r"^\d{1,2}\s*[\.)]\s+", nxt):
-                break
-            if len(nxt) < 2:
-                i += 1
-                continue
-            opts.append(nxt)
-            y0 = int(lines[i]["top"])
-            y1 = int(lines[i]["top"] + lines[i]["height"])
-            scores.append(left_margin_tick_score(gray, y0, y1, page_w))
-            i += 1
-            if len(opts) >= 8:
-                break
-
-        if len(opts) < 2:
-            continue
-
-        qid += 1
-        spread = max(scores) - min(scores) if scores else 0.0
-        if spread >= 0.012:
-            correct_idx = int(np.argmax(scores))
-        else:
-            correct_idx = None
-
-        questions.append(
-            {
-                "id": f"q{qid}",
-                "stem": stem,
-                "options": opts,
-                "labels": [chr(65 + j) for j in range(len(opts))],
-                "correctIndex": correct_idx,
-            }
-        )
-    return questions
-
-
-def extract_photo_pdf_cv(
-    pdf_path: Path,
-    progress: ProgressFn | None,
-) -> list[dict[str, Any]]:
-    require_tesseract()
-    import pytesseract
-
-    doc = fitz.open(pdf_path)
-    n = len(doc)
-    all_q: list[dict[str, Any]] = []
-    base_id = 0
-
-    for pi in range(n):
-        page = doc.load_page(pi)
-        pix = page.get_pixmap(dpi=300)
-        img_bgr = pixmap_to_bgr(pix)
-        gray = preprocess_photo_page_cv(img_bgr)
-
-        pil = Image.fromarray(gray)
-        data = pytesseract.image_to_data(
-            pil,
-            output_type=pytesseract.Output.DICT,
-            lang="eng",
-            config="--psm 6",
-        )
-
-        lines = group_tesseract_words_into_lines(data)
-        page_qs = parse_lines_photo_mcq_with_ticks(lines, gray)
-        if not page_qs:
-            blob = pytesseract.image_to_string(pil, lang="eng", config="--psm 6")
-            page_qs = parse_mcqs_unlabeled_blocks(blob)
-        for q in page_qs:
-            base_id += 1
-            q["id"] = f"q{base_id}"
-            all_q.append(q)
-
-        if progress:
-            progress(
-                22 + int(22 * (pi + 1) / max(n, 1)),
-                "qa_extraction",
-                f"Photo CV + OCR page {pi + 1}/{n}",
-            )
-
-    doc.close()
-    return all_q
-
-
-def should_use_photo_cv(doc: fitz.Document, base_text: str) -> bool:
-    n = len(doc)
-    if n == 0:
-        return False
-    avg = len(base_text.strip()) / max(n, 1)
-    return avg < 120
-
-
-def preprocess_pdf_page_image(pix_bytes: bytes) -> bytes:
-    arr = np.frombuffer(pix_bytes, dtype=np.uint8)
-    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-    if img is None:
-        return pix_bytes
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    gray = cv2.fastNlMeansDenoising(gray, None, 10, 7, 21)
-    th = cv2.adaptiveThreshold(
-        gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, 14
-    )
-    ok, buf = cv2.imencode(".png", th)
-    return buf.tobytes() if ok else pix_bytes
 
 
 def extract_text_and_bold_answers(pdf_path: Path) -> tuple[str, list[dict[str, Any]]]:
@@ -291,12 +78,10 @@ def ocr_if_needed(pdf_path: Path, base_text: str, progress: ProgressFn | None) -
     ocr_parts: list[str] = []
     for i in range(n):
         page = doc.load_page(i)
-        pix = page.get_pixmap(dpi=200)
-        raw = pix.tobytes("png")
-        pre = preprocess_pdf_page_image(raw)
-        im = Image.open(io.BytesIO(pre))
+        pix = page.get_pixmap(dpi=150)
+        im = Image.open(io.BytesIO(pix.tobytes("png")))
         try:
-            txt = pytesseract.image_to_string(im, lang="eng")
+            txt = pytesseract.image_to_string(im, lang="eng", config="--psm 6")
         except Exception:
             txt = ""
         ocr_parts.append(txt)
@@ -449,13 +234,9 @@ def match_answer_line(questions: list[dict[str, Any]], full_text: str) -> None:
 def run_minilm_structuring(questions: list[dict[str, Any]], progress: ProgressFn | None) -> None:
     if not questions:
         return
-    model = _get_embedder()
-    stems = [q["stem"] for q in questions]
+    # Keep this phase lightweight; embeddings are not required for output correctness.
     if progress:
-        progress(62, "structuring", "MiniLM: encoding question stems…")
-    model.encode(stems, show_progress_bar=False, batch_size=16)
-    if progress:
-        progress(72, "structuring", "MiniLM: structuring complete")
+        progress(72, "structuring", "Structuring complete")
 
 
 def fill_missing_answers(questions: list[dict[str, Any]]) -> None:
@@ -478,44 +259,20 @@ def run_pipeline(
     base_text, bold_hits = extract_text_and_bold_answers(pdf_path)
     _notify(p, 2, 12, "preprocessing", "Analyzing pages & text layers…")
 
-    p(14, "preprocessing", "OpenCV preprocessing (scan/photo pages)…")
-    _notify(p, 15, 22, "preprocessing", "Rendering page bitmaps…")
+    p(14, "preprocessing", "Preparing OCR fallback…")
+    _notify(p, 15, 22, "preprocessing", "Rendering OCR page bitmaps…")
 
     p(25, "preprocessing", "Preprocessing complete")
 
-    doc_probe = fitz.open(pdf_path)
-    use_photo_cv = should_use_photo_cv(doc_probe, base_text)
-    doc_probe.close()
-
-    questions: list[dict[str, Any]] = []
-    full_text = ""
-
-    if use_photo_cv:
-        p(26, "qa_extraction", "Photo PDF: OpenCV preprocess + Tesseract (layout)…")
-        photo_qs = extract_photo_pdf_cv(pdf_path, p)
-        if photo_qs:
-            questions = photo_qs
-            full_text = "\n".join(f"{q['stem']} {' '.join(q['options'])}" for q in questions)
-            p(50, "qa_extraction", "Photo CV: extracted questions + tick marks")
-
+    p(26, "qa_extraction", "Tesseract OCR (if needed)…")
+    full_text = ocr_if_needed(pdf_path, base_text, p)
+    full_text = full_text or base_text
+    _notify(p, 35, 45, "qa_extraction", "Extracting text & layout…")
+    p(48, "qa_extraction", "Detecting MCQ patterns…")
+    questions = parse_mcqs_from_text(full_text)
     if not questions:
-        p(26, "qa_extraction", "Tesseract OCR (if needed)…")
-        full_text = ocr_if_needed(pdf_path, base_text, p)
-        full_text = full_text or base_text
-        _notify(p, 35, 45, "qa_extraction", "Extracting text & layout…")
-        p(48, "qa_extraction", "Detecting MCQ patterns…")
-        questions = parse_mcqs_from_text(full_text)
-        if not questions:
-            questions = parse_mcqs_unlabeled_blocks(full_text)
-        p(50, "qa_extraction", "Q&A extraction complete")
-
-    if not questions:
-        p(28, "qa_extraction", "Fallback: photo CV (OCR layout + tick marks)…")
-        photo_fallback = extract_photo_pdf_cv(pdf_path, p)
-        if photo_fallback:
-            questions = photo_fallback
-            full_text = "\n".join(f"{q['stem']} {' '.join(q['options'])}" for q in questions)
-            p(50, "qa_extraction", "Photo CV: extracted questions + tick marks")
+        questions = parse_mcqs_unlabeled_blocks(full_text)
+    p(50, "qa_extraction", "Q&A extraction complete")
 
     if not questions:
         raise RuntimeError(
@@ -523,7 +280,7 @@ def run_pipeline(
             "Use numbered questions (1. 2. …) and option lines under each."
         )
 
-    p(51, "structuring", "Mapping bold / answer keys / ticks to options…")
+    p(51, "structuring", "Mapping bold / answer keys to options…")
     match_bold_to_option(questions, bold_hits)
     match_answer_line(questions, full_text)
 
