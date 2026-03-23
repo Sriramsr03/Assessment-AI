@@ -1,6 +1,7 @@
-export async function uploadAndProcessPdf(file) {
+export async function uploadAndProcessPdf(file, mode = 'auto') {
   const fd = new FormData();
   fd.append('file', file);
+  fd.append('mode', mode);
   const res = await fetch('/api/process-pdf', {
     method: 'POST',
     body: fd,

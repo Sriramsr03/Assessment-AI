@@ -395,3 +395,33 @@ body {
 .result-details .bad {
   color: #f5a4a4;
 }
+
+.mode-picker {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0 0 1rem;
+  flex-wrap: wrap;
+}
+
+.mode-label {
+  color: #8b98a8;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.mode-select {
+  background: #1a2332;
+  color: #e8eaed;
+  border: 1px solid #2d3a4d;
+  border-radius: 10px;
+  padding: 0.55rem 0.75rem;
+  font-family: inherit;
+  font-size: 0.95rem;
+  outline: none;
+}
+
+.mode-select:focus {
+  border-color: #7eb8ff;
+  box-shadow: 0 0 0 3px rgba(126, 184, 255, 0.15);
+}

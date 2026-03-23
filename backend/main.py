@@ -8,7 +8,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from fastapi import Body, FastAPI, File, HTTPException, UploadFile
+from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
 from .pipeline import run_pipeline
@@ -38,7 +38,7 @@ app.add_middleware(
 )
 
 
-def _job_worker(job_id: str):
+def _job_worker(job_id: str, mode: str):
     def progress(pct: int, phase_key: str, label: str):
         with jobs_lock:
             jobs[job_id] = {
@@ -61,7 +61,7 @@ def _job_worker(job_id: str):
                 "error": None,
             }
 
-        run_pipeline(PDF_PATH, ASSESSMENT_PATH, progress)
+        run_pipeline(PDF_PATH, ASSESSMENT_PATH, progress, mode=mode)
 
         with jobs_lock:
             jobs[job_id] = {
@@ -85,7 +85,7 @@ def _job_worker(job_id: str):
 
 
 @app.post("/api/process-pdf")
-async def process_pdf(file: UploadFile = File(...)):
+async def process_pdf(file: UploadFile = File(...), mode: str = Form("auto")):
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(400, "PDF file required")
 
@@ -104,7 +104,7 @@ async def process_pdf(file: UploadFile = File(...)):
             "error": None,
         }
 
-    t = threading.Thread(target=_job_worker, args=(job_id,), daemon=True)
+    t = threading.Thread(target=_job_worker, args=(job_id, mode), daemon=True)
     t.start()
 
     return {"jobId": job_id}
