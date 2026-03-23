@@ -9,8 +9,6 @@ export function TeacherPage() {
   const dragDepth = useRef(0);
   const inputRef = useRef(null);
 
-  const [pdfMode, setPdfMode] = useState('printed');
-
   const [jobId, setJobId] = useState(null);
   const [progress, setProgress] = useState(null);
 
@@ -26,13 +24,13 @@ export function TeacherPage() {
     }
     setBusy(true);
     try {
-      const { jobId: id } = await uploadAndProcessPdf(file, pdfMode);
+      const { jobId: id } = await uploadAndProcessPdf(file);
       setJobId(id);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Upload failed.');
       setBusy(false);
     }
-  }, [pdfMode]);
+  }, []);
 
   useEffect(() => {
     if (!jobId) return undefined;
@@ -122,25 +120,9 @@ export function TeacherPage() {
       <p className="muted">
         Upload a PDF with numbered questions (<code>1.</code> …) and options. <strong>Digital PDFs:</strong> options
         as <code>A)</code> lines or plain lines; correct answers from <strong>bold</strong> text.{' '}
-        Choose <strong>Written</strong> for ticked answers (requires Tesseract). Start the API with{' '}
+        Tesseract OCR is used as fallback for scanned/image PDFs (install on PATH). Start the API with{' '}
         <code>npm run dev:api</code> or <code>npm run dev:all</code>.
       </p>
-
-      <div className="mode-picker">
-        <label className="mode-label" htmlFor="pdfMode">
-          PDF type
-        </label>
-        <select
-          id="pdfMode"
-          className="mode-select"
-          value={pdfMode}
-          disabled={busy}
-          onChange={(e) => setPdfMode(e.target.value)}
-        >
-          <option value="printed">Printed / digital</option>
-          <option value="written">Written / ticked</option>
-        </select>
-      </div>
 
       <input
         ref={inputRef}
@@ -196,6 +178,9 @@ export function TeacherPage() {
       <div className="actions">
         <Link to="/assessment" className="btn">
           Student — take assessment
+        </Link>
+        <Link to="/report" className="btn secondary">
+          Teacher report
         </Link>
       </div>
 

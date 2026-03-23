@@ -26,6 +26,7 @@ dist-ssr
 # Local questions PDF (written by dev/preview server)
 questions pdf/questions.pdf
 questions pdf/assessment.json
+questions pdf/attempts.jsonl
 questions pdf/meta.json
 
 .node_modules

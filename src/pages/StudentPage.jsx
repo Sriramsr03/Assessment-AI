@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { getAssessment, submitAnswers } from '../lib/assessmentApi.js';
+import { getAssessment, submitAnswersWithTiming } from '../lib/assessmentApi.js';
 
 export function StudentPage() {
   const [loading, setLoading] = useState(true);
@@ -9,6 +9,9 @@ export function StudentPage() {
   const [answers, setAnswers] = useState({});
   const [result, setResult] = useState(null);
   const [submitting, setSubmitting] = useState(false);
+
+  const attemptStartAtRef = useRef(null);
+  const questionTimeMsRef = useRef({});
 
   const loadAssessment = useCallback(async () => {
     setLoading(true);
@@ -39,13 +42,20 @@ export function StudentPage() {
 
   const pick = useCallback((qid, index) => {
     setAnswers((prev) => ({ ...prev, [qid]: index }));
+    if (attemptStartAtRef.current == null) {
+      attemptStartAtRef.current = Date.now();
+    }
+    questionTimeMsRef.current[qid] = Date.now() - attemptStartAtRef.current;
   }, []);
 
   const onSubmit = useCallback(async () => {
     setSubmitting(true);
     setError(null);
     try {
-      const r = await submitAnswers(answers);
+      const timeTakenMs =
+        attemptStartAtRef.current == null ? null : Date.now() - attemptStartAtRef.current;
+      const questionTimesMs = questionTimeMsRef.current;
+      const r = await submitAnswersWithTiming(answers, timeTakenMs, questionTimesMs);
       setResult(r);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Submit failed.');
@@ -144,6 +154,11 @@ export function StudentPage() {
           <p className="result-score">
             Score: <strong>{result.score}%</strong> ({result.correct} / {result.total} correct)
           </p>
+          {typeof result.totalTimeMs === 'number' && (
+            <p className="muted" style={{ margin: '0 0 1rem' }}>
+              Total time: <strong>{Math.round(result.totalTimeMs / 1000)}s</strong>
+            </p>
+          )}
           <ul className="result-details">
             {result.details.map((d) => (
               <li key={d.id} className={d.correct ? 'ok' : 'bad'}>
@@ -166,6 +181,8 @@ export function StudentPage() {
             onClick={() => {
               setResult(null);
               setAnswers({});
+              attemptStartAtRef.current = null;
+              questionTimeMsRef.current = {};
             }}
           >
             Review quiz again

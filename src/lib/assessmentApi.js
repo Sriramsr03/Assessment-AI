@@ -1,7 +1,6 @@
-export async function uploadAndProcessPdf(file, mode = 'auto') {
+export async function uploadAndProcessPdf(file) {
   const fd = new FormData();
   fd.append('file', file);
-  fd.append('mode', mode);
   const res = await fetch('/api/process-pdf', {
     method: 'POST',
     body: fd,
@@ -37,6 +36,28 @@ export async function submitAnswers(answers) {
   if (!res.ok) {
     const t = await res.text();
     throw new Error(t || 'Submit failed.');
+  }
+  return res.json();
+}
+
+export async function submitAnswersWithTiming(answers, timeTakenMs, questionTimesMs) {
+  const res = await fetch('/api/submit', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ answers, timeTakenMs, questionTimesMs }),
+  });
+  if (!res.ok) {
+    const t = await res.text();
+    throw new Error(t || 'Submit failed.');
+  }
+  return res.json();
+}
+
+export async function getTeacherReport() {
+  const res = await fetch('/api/teacher-report');
+  if (!res.ok) {
+    const t = await res.text();
+    throw new Error(t || 'Could not load teacher report.');
   }
   return res.json();
 }
