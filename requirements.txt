@@ -1,0 +1,7 @@
+opencv-python
+easyocr
+pdf2image
+numpy
+fastapi
+uvicorn
+streamlit
