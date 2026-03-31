@@ -1,7 +1,9 @@
-opencv-python
-easyocr
-pdf2image
-numpy
-fastapi
-uvicorn
 streamlit
+easyocr
+opencv-python
+numpy
+pillow
+scikit-learn
+pymupdf
+google-generativeai
+python-dotenv
